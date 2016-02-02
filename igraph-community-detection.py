@@ -1,83 +1,96 @@
 import igraph as ig
-import louvain as louvain
-import csv as csv
+import louvain
+import csv
 import random
+import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from mpl_toolkits.basemap import Basemap
 
-def plot_graph(G, file, partition):
-  ig.plot(G, target=file, vertex_color=partition.membership,
-        mark_groups=zip(map(list, partition.community.values()), 
-                        partition.community.keys()),
-        vertex_frame_width=0,
-        palette=ig.RainbowPalette(len(partition.community)))
 
+# graph import variables
+MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
+
+# community detection variables
+RESOLUTION_OF_DETECTION = 0.75
+
+# mapping variables
+MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
+MAP_NAME_PREFIX = "american-regions"
+DRAW = "c"  # 'c' for crude, anything else for nice-quality map
+
+# store node and edge information for preprocessing and filtering
 nodes = []
 edges = []
-weights = []
-geo = {}
+geo_coordinates = {}
+
 G = ig.Graph(directed=True)
 
 with open('government/national-gazetteer.tsv') as tsvfile:
-    reader = csv.DictReader(tsvfile,delimiter='\t', quoting=csv.QUOTE_NONE)
+    reader = csv.DictReader(tsvfile, delimiter='\t', quoting=csv.QUOTE_NONE)
     for row in reader:
         fips = row["GEOID"].strip()
         lat = row["INTPTLAT"].strip()
         lng = row["INTPTLONG"].strip()
-        geo[fips] = (lat, lng)
+        geo_coordinates[fips] = (lat, lng)
 
 with open('generated-datasets/county-to-county1213.csv') as csvfile:
     reader = csv.DictReader(csvfile)
     for row in reader:
         fromCounty = row['fromCountyFIPSid']
         toCounty = row['toCountyFIPSid']
+        # weight may also be set to the value of int(row['countTaxReturns']) or
+        # int(row['sumAdjustedGrossIncome1000s'])
         weight = int(row['countTaxExemptions'])
-        if weight > 0:
+        if weight >= MINIMUM_EDGE_WEIGHT:
             nodes.append(fromCounty)
             nodes.append(toCounty)
             edges.append((fromCounty, toCounty, weight))
-            weights.append(weight)
-        
+
+# omit duplicate node IDs
 nodes = set(nodes)
-for n in nodes:
-    lat = geo[n][0]
-    lng = geo[n][1]
-    G.add_vertex(n, latitude=lat, longitude=lng)
-for e in edges:
-    G.add_edge(e[0], e[1], weight=e[2])
 
+# fill the graph
+for node in nodes:
+    lat = geo_coordinates[node][0]
+    lng = geo_coordinates[node][1]
+    G.add_vertex(node, latitude=lat, longitude=lng)
+for edge in edges:
+    G.add_edge(edge[0], edge[1], weight=edge[2])
 
-#ig.summary(G)
-#print(G)
+# detect communities
+partition = louvain.find_partition(G, method='RBConfiguration', weight='weight',
+                                   resolution_parameter=RESOLUTION_OF_DETECTION)
+print("Found {0} communities.".format(len(partition)))
 
-opt = louvain.Optimiser();
-partition_modularity = opt.find_partition(G, louvain.ModularityVertexPartition);  #ModularityVertexPartition
-#for c in p_mod.community:
-#    print(p_mod.community[c])
-
-communityCount = len(partition_modularity.community)
-for partition in partition_modularity.community:
-    community = partition_modularity.community[partition]
-    for county in community:
-        print("Partition {0} County {1}".format(partition, G.vs[county]["name"]))
-
-#p_mod_rb = louvain.RBConfigurationVertexPartition(G, resolution=1, membership=p_mod.membership);
-#G['layout'] = G.layout_auto();
-#plot_graph(G, 'counties_comm_mod.pdf', partition_modularity);
-
-m = Basemap(llcrnrlon=-119,llcrnrlat=22,urcrnrlon=-64,urcrnrlat=49, projection='lcc',lat_1=33,lat_2=45,lon_0=-95,resolution='c')
+# draw the basemap
+plt.figure(figsize=(8, 4))
+m = Basemap(llcrnrlon=-119, llcrnrlat=22, urcrnrlon=-64, urcrnrlat=49,
+            projection='lcc', lat_1=33, lat_2=45, lon_0=-95, resolution=DRAW)
+if DRAW == 'c':
+    m.shadedrelief()
+    m.drawrivers()
+    DPI = 500
+else:
+    DPI = 100
 m.drawcoastlines()
 m.drawstates()
 m.drawcountries()
-colors = iter(cm.rainbow(np.linspace(0, 1, communityCount)))
-for partition in partition_modularity.community:
-    color = next(colors)
-    community = partition_modularity.community[partition]
-    if len(community) >= 5:
-        for county in community:
-            x, y = m(G.vs[county]["longitude"],G.vs[county]["latitude"]) 
-            m.scatter(x,y,3,marker='o',color=color)
-plt.savefig('foo.png')
 
+# draw points representing counties painted onto the basemap
+colors = iter(cm.rainbow(np.linspace(0, 1, len(partition))))
+for community in partition:
+    color = next(colors)
+    if len(community) >= MINIMUM_COMMUNITY_SIZE:
+        for county in community:
+            x, y = m(G.vs[county]["longitude"], G.vs[county]["latitude"])
+            m.scatter(x, y, 3, marker='o', color=color)
+
+mapName = MAP_NAME_PREFIX + "-{0}-{1}-{2}-{3}-{4}.png".format(
+                                                    datetime.datetime.today(),
+                                                    MINIMUM_EDGE_WEIGHT,
+                                                    MINIMUM_COMMUNITY_SIZE,
+                                                    RESOLUTION_OF_DETECTION,
+                                                    len(partition))
+plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
