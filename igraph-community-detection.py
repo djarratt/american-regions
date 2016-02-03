@@ -74,12 +74,12 @@ for res in RESOLUTION_LIST:
     m = Basemap(llcrnrlon=-119, llcrnrlat=22, urcrnrlon=-64, urcrnrlat=49,
                 projection='lcc', lat_1=33, lat_2=45, lon_0=-95,
                 resolution=DRAW)
-    if DRAW == 'c':
+    if DRAW == "c":
+        DPI = 100
+    else:
         m.shadedrelief()
         m.drawrivers()
         DPI = 500
-    else:
-        DPI = 100
     m.drawcoastlines()
     m.drawstates()
     m.drawcountries()
@@ -102,3 +102,10 @@ for res in RESOLUTION_LIST:
                                                     res, len(partition),
                                                     drawnCommunities)
     plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
+
+# TODO: generate N dictionaries of {name: community} with the same K number of
+# communities of size >= MINIMUM_COMMUNITY_SIZE
+# TODO: experiment with different resolutions but keep K constant
+# TODO: write script with input name and output dictionary of the percent of
+# times all names are in the same community
+# TODO: map those percentages
