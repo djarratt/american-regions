@@ -9,103 +9,202 @@ import matplotlib.cm as cm
 from mpl_toolkits.basemap import Basemap
 
 
-# graph import variables
-MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
+def getGeoCoordinatesFrom(filePath):
+    """ Centers of Population from the U.S. Census Bureau: http://www2.census
+    .gov/geo/docs/reference/cenpop2010/county/CenPop2010_Mean_CO.txt """
+    geo_coordinates = {}
+    with open(filePath) as csvfile:
+        reader = csv.DictReader(csvfile, delimiter=',', quoting=csv.QUOTE_NONE)
+        for row in reader:
+            statefp = row["STATEFP"].strip()
+            countyfp = row["COUNTYFP"].strip()
+            fips = statefp + countyfp
+            lat = row["LATITUDE"].strip().replace("+", "")
+            lng = row["LONGITUDE"].strip()
+            geo_coordinates[fips] = (lat, lng)
+    return geo_coordinates
 
-# community detection variables
-RESOLUTION_LIST = [0.2, 0.3, 0.4, 0.5, 0.6]
 
-# mapping variables
-MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
-MAP_NAME_PREFIX = "american-regions"
-DRAW = "c"  # 'c' for crude, anything else for nice-quality map
+def getNodesEdgesAtMinimumWeightFrom(filePath, minimumWeight):
+    nodes = []
+    edges = []
+    with open(filePath) as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            fromCounty = row['fromCountyFIPSid']
+            toCounty = row['toCountyFIPSid']
+            # weight may also be set to the value of either
+            # int(row['countTaxReturns'])
+            # int(row['sumAdjustedGrossIncome1000s'])
+            weight = int(row['countTaxExemptions'])
+            if weight >= minimumWeight:
+                nodes.append(fromCounty)
+                nodes.append(toCounty)
+                edges.append((fromCounty, toCounty, weight))
 
-# store node and edge information for preprocessing and filtering
-nodes = []
-edges = []
-geo_coordinates = {}
+    # omit duplicate node IDs
+    nodes = set(nodes)
+    return nodes, edges
 
-# initialize the graph
-G = ig.Graph(directed=True)
 
-# import data
-with open('government/national-gazetteer.tsv') as tsvfile:
-    reader = csv.DictReader(tsvfile, delimiter='\t', quoting=csv.QUOTE_NONE)
-    for row in reader:
-        fips = row["GEOID"].strip()
-        lat = row["INTPTLAT"].strip()
-        lng = row["INTPTLONG"].strip()
-        geo_coordinates[fips] = (lat, lng)
+def getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geo_coordinates):
+    graph = ig.Graph(directed=True)
+    for node in nodes:
+        lat = geo_coordinates[node][0]
+        lng = geo_coordinates[node][1]
+        graph.add_vertex(node, latitude=lat, longitude=lng)
+    for edge in edges:
+        graph.add_edge(edge[0], edge[1], weight=edge[2])
+    return graph
 
-with open('generated-datasets/county-to-county1213.csv') as csvfile:
-    reader = csv.DictReader(csvfile)
-    for row in reader:
-        fromCounty = row['fromCountyFIPSid']
-        toCounty = row['toCountyFIPSid']
-        # weight may also be set to the value of int(row['countTaxReturns']) or
-        # int(row['sumAdjustedGrossIncome1000s'])
-        weight = int(row['countTaxExemptions'])
-        if weight >= MINIMUM_EDGE_WEIGHT:
-            nodes.append(fromCounty)
-            nodes.append(toCounty)
-            edges.append((fromCounty, toCounty, weight))
 
-# omit duplicate node IDs
-nodes = set(nodes)
+def writeResultsToFile(graph, results, filePath):
+    with open(filePath, 'wb') as csvfile:
+        fieldnames = ['county', 'community']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for key, communityID in results.iteritems():
+            county = graph.vs[key]["name"]
+            writer.writerow({'county': county, 'community': communityID})
 
-# fill the graph
-for node in nodes:
-    lat = geo_coordinates[node][0]
-    lng = geo_coordinates[node][1]
-    G.add_vertex(node, latitude=lat, longitude=lng)
-for edge in edges:
-    G.add_edge(edge[0], edge[1], weight=edge[2])
 
-for res in RESOLUTION_LIST:
-    # detect communities
-    partition = louvain.find_partition(G, method='RBConfiguration',
-                                       weight='weight',
-                                       resolution_parameter=res)
-    print("Found {0} communities at resolution {1}.".format(len(partition),
-                                                            res))
+def getGraphPartition(graph, resolution):
+    """The returned partition is each county assigned to a community. While
+    there are several methods available, RBConfiguration is tunable with the
+    resolution parameter. Bigger resolutions mean smaller communities. Smaller
+    resolutions mean fewer communities."""
+    return louvain.find_partition(G, method='RBConfiguration', weight='weight',
+                                  resolution_parameter=resolution)
 
-    # draw the basemap
-    plt.figure(figsize=(8, 4))
+
+def getCountOfCommunitiesOfMinimumSize(partition, minimumSize):
+    count = 0
+    for community in partition:
+        if len(community) >= minimumSize:
+            count += 1
+    return count
+
+
+def getQualitativeColorList(numberOfColorsNeeded):
+    """From the invaluable http://colorbrewer2.org using qualitative data
+    classes, colorblind safe for 3 and 4 colors, border context, terrain
+    background. See also http://matplotlib.org/api/colors_api.html"""
+    if numberOfColorsNeeded == 3:
+        return ['#1b9e77', '#d95f02', '#7570b3']
+    elif numberOfColorsNeeded == 4:
+        return ['#a6cee3', '#1f78b4', '#b2df8a', '#33a02c']
+    elif numberOfColorsNeeded == 5:
+        return ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e']
+    elif numberOfColorsNeeded == 6:
+        return ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e',
+                '#e6ab02']
+    elif numberOfColorsNeeded == 7:
+        return ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e',
+                '#e6ab02', '#a6761d']
+    else:
+        return iter(cm.rainbow(np.linspace(0, 1, numberOfColorsNeeded)))
+
+
+def getDictOfCommunities(partition, minimumSize):
+    results = {}
+    communityId = 0
+    for community in partition:
+        if len(community) > minimumSize:
+            for county in community:
+                results[county] = communityId
+        communityId += 1
+    return results
+
+
+def drawMapOfPartition(partition, quality, minimumSize):
+    if quality == 'high':
+        basemapResolution = 'i'
+        DPI = 500
+        reliefScale = 1
+        figSize = (10, 5)
+    else:
+        basemapResolution = 'c'
+        DPI = 100
+        reliefScale = 0.2
+        figSize = (4, 2)
+
+    plt.figure(figsize=figSize)
     m = Basemap(llcrnrlon=-119, llcrnrlat=22, urcrnrlon=-64, urcrnrlat=49,
                 projection='lcc', lat_1=33, lat_2=45, lon_0=-95,
-                resolution=DRAW)
-    if DRAW == "c":
-        DPI = 100
-    else:
-        m.shadedrelief()
-        m.drawrivers()
-        DPI = 500
+                resolution=basemapResolution)
+    m.shadedrelief(scale=reliefScale)
     m.drawcoastlines()
     m.drawstates()
     m.drawcountries()
+    if quality == 'high':
+        m.drawrivers(color='blue')
+        m.drawcounties()
 
-    # draw points representing counties painted onto the basemap
-    colors = iter(cm.rainbow(np.linspace(0, 1, len(partition))))
-    drawnCommunities = 0
+    numberOfCommunitiesDetected = getCountOfCommunitiesOfMinimumSize(
+                                    partition, minimumSize)
+    colors = getQualitativeColorList(numberOfCommunitiesDetected)
     for community in partition:
         color = next(colors)
-        if len(community) >= MINIMUM_COMMUNITY_SIZE:
-            drawnCommunities += 1
+        if len(community) >= minimumSize:
             for county in community:
                 x, y = m(G.vs[county]["longitude"], G.vs[county]["latitude"])
                 m.scatter(x, y, 3, marker='o', color=color)
 
-    mapName = MAP_NAME_PREFIX + "-{0}-{1}-{2}-{3}-{4}-{5}.png".format(
-                                                    datetime.datetime.today(),
-                                                    MINIMUM_EDGE_WEIGHT,
-                                                    MINIMUM_COMMUNITY_SIZE,
-                                                    res, len(partition),
-                                                    drawnCommunities)
+    mapName = "maps/american-regions-{0}-{1}-{2}.png".format(
+                datetime.datetime.today(), res, numberOfCommunitiesDetected)
     plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
 
-# TODO: generate N dictionaries of {name: community} with the same K number of
-# communities of size >= MINIMUM_COMMUNITY_SIZE
-# TODO: experiment with different resolutions but keep K constant
 # TODO: write script with input name and output dictionary of the percent of
 # times all names are in the same community
 # TODO: map those percentages
+
+MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
+MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
+ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND = [4]
+CREATE_THIS_MANY_RESULTS_FILES = 3
+
+try:
+    G = ig.Graph.Read_Pickle('persistentGraph.pickle')
+    print("Loaded graph from stored pickle file at {0}".format(
+        datetime.datetime.today()))
+except Exception as e:
+    print(e)
+    geo_coordinates = getGeoCoordinatesFrom('government/CenPop2010_Mean_CO.txt')
+    print("Loaded geo coordinates at {0}".format(
+        datetime.datetime.today()))
+    nodes, edges = getNodesEdgesAtMinimumWeightFrom(
+                                'generated-datasets/county-to-county1213.csv',
+                                MINIMUM_EDGE_WEIGHT)
+    print("Loaded nodes and edges at {0}".format(
+        datetime.datetime.today()))
+    G = getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geo_coordinates)
+    print("Filled graph with nodes and edges at {0}".format(
+        datetime.datetime.today()))
+    G.write_pickle('persistentGraph.pickle')
+    print("Saved graph in stored pickle file at {0}".format(
+        datetime.datetime.today()))
+
+print("Beginning community detection at {0}".format(datetime.datetime.today()))
+for i in range(CREATE_THIS_MANY_RESULTS_FILES):
+    numberOfCommunitiesDetected = 0
+    while numberOfCommunitiesDetected not in \
+            ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND:
+
+        partitionResolution = random.uniform(0.225, 0.3)
+        partition = getGraphPartition(G, partitionResolution)
+        numberOfCommunitiesDetected = getCountOfCommunitiesOfMinimumSize(
+            partition, MINIMUM_COMMUNITY_SIZE)
+        print("{0} communities found with resolution {1} at {2}".format(
+            numberOfCommunitiesDetected, partitionResolution,
+            datetime.datetime.today()))
+
+    results = getDictOfCommunities(partition, MINIMUM_COMMUNITY_SIZE)
+    print("Created results data structure at {0}".format(
+        datetime.datetime.today()))
+    # drawMapOfPartition(partition, 'crude', MINIMUM_COMMUNITY_SIZE)
+    writeResultsToFile(G, results,
+                       'results-{0}-{1}-{2}.csv'.format(
+                            i, partitionResolution, datetime.datetime.today()))
+    print("Wrote results to CSV file at {0}".format(datetime.datetime.today()))
+    print("Completed {0} of {1} results files.".format(
+                            (i+1), CREATE_THIS_MANY_RESULTS_FILES))
