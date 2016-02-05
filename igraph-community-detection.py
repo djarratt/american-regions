@@ -58,14 +58,13 @@ def getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geo_coordinates):
     return graph
 
 
-def writeResultsToFile(graph, results, filePath):
+def writeResultsToFile(results, filePath):
     with open(filePath, 'wb') as csvfile:
-        fieldnames = ['county', 'community']
+        fieldnames = ['counties']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
-        for key, communityID in results.iteritems():
-            county = graph.vs[key]["name"]
-            writer.writerow({'county': county, 'community': communityID})
+        for community in results:
+            writer.writerow({'counties': community})
 
 
 def getGraphPartition(graph, resolution):
@@ -105,18 +104,27 @@ def getQualitativeColorList(numberOfColorsNeeded):
         return iter(cm.rainbow(np.linspace(0, 1, numberOfColorsNeeded)))
 
 
-def getDictOfCommunities(partition, minimumSize):
-    results = {}
-    communityId = 0
+def addResultsToSimilarityMatrix(graph, partition, minimumSize,
+                                 similarityMatrix):
     for community in partition:
+        communityList = []
         if len(community) > minimumSize:
             for county in community:
-                results[county] = communityId
-        communityId += 1
-    return results
+                thisFIPS = graph.vs[county]["name"]
+                communityList.append(thisFIPS)
+            for county1 in communityList:
+                for county2 in communityList:
+                    if county1 not in similarityMatrix:
+                        similarityMatrix[county1] = {}
+                        similarityMatrix[county1][county2] = 1
+                    elif county2 not in similarityMatrix[county1]:
+                        similarityMatrix[county1][county2] = 1
+                    else:
+                        similarityMatrix[county1][county2] += 1
+    return similarityMatrix
 
 
-def drawMapOfPartition(partition, quality, minimumSize):
+def drawMapOfPartition(partition, quality, minimumSize, graph):
     if quality == 'high':
         basemapResolution = 'i'
         DPI = 500
@@ -147,16 +155,51 @@ def drawMapOfPartition(partition, quality, minimumSize):
         color = next(colors)
         if len(community) >= minimumSize:
             for county in community:
-                x, y = m(G.vs[county]["longitude"], G.vs[county]["latitude"])
+                x, y = m(graph.vs[county]["longitude"],
+                         graph.vs[county]["latitude"])
                 m.scatter(x, y, 3, marker='o', color=color)
 
     mapName = "maps/american-regions-{0}-{1}-{2}.png".format(
                 datetime.datetime.today(), res, numberOfCommunitiesDetected)
     plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
 
-# TODO: write script with input name and output dictionary of the percent of
-# times all names are in the same community
-# TODO: map those percentages
+
+def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
+                              denominator):
+    if quality == 'high':
+        basemapResolution = 'i'
+        DPI = 500
+        reliefScale = 1
+        figSize = (10, 5)
+    else:
+        basemapResolution = 'c'
+        DPI = 100
+        reliefScale = 0.2
+        figSize = (4, 2)
+
+    plt.figure(figsize=figSize)
+    m = Basemap(llcrnrlon=-119, llcrnrlat=22, urcrnrlon=-64, urcrnrlat=49,
+                projection='lcc', lat_1=33, lat_2=45, lon_0=-95,
+                resolution=basemapResolution)
+    m.shadedrelief(scale=reliefScale)
+    m.drawcoastlines()
+    m.drawstates()
+    m.drawcountries()
+    if quality == 'high':
+        m.drawrivers(color='blue')
+        m.drawcounties()
+
+    toDraw = similarityMatrix[targetCounty]
+
+    for county, matches in toDraw.iteritems():
+        x, y = m(graph.vs.find(name=county)["longitude"],
+                 graph.vs.find(name=county)["latitude"])
+        m.scatter(x, y, 3, marker='o', color=str((matches/float(denominator))))
+
+    mapName = "proportion-map-{0}-{1}.png".format(
+        targetCounty, datetime.datetime.today())
+    plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
+
 
 MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
 MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
@@ -184,6 +227,8 @@ except Exception as e:
     print("Saved graph in stored pickle file at {0}".format(
         datetime.datetime.today()))
 
+similarityMatrix = {}
+
 print("Beginning community detection at {0}".format(datetime.datetime.today()))
 for i in range(CREATE_THIS_MANY_RESULTS_FILES):
     numberOfCommunitiesDetected = 0
@@ -198,13 +243,22 @@ for i in range(CREATE_THIS_MANY_RESULTS_FILES):
             numberOfCommunitiesDetected, partitionResolution,
             datetime.datetime.today()))
 
-    results = getDictOfCommunities(partition, MINIMUM_COMMUNITY_SIZE)
-    print("Created results data structure at {0}".format(
-        datetime.datetime.today()))
-    # drawMapOfPartition(partition, 'crude', MINIMUM_COMMUNITY_SIZE)
-    writeResultsToFile(G, results,
-                       'results-{0}-{1}-{2}.csv'.format(
-                            i, partitionResolution, datetime.datetime.today()))
-    print("Wrote results to CSV file at {0}".format(datetime.datetime.today()))
+    #results = getListOfCommunities(G, partition, MINIMUM_COMMUNITY_SIZE)
+    #print("Created results data structure at {0}".format(
+    #    datetime.datetime.today()))
+    # drawMapOfPartition(partition, 'crude', MINIMUM_COMMUNITY_SIZE, graph)
+
+    similarityMatrix = addResultsToSimilarityMatrix(G, partition,
+                                                    MINIMUM_COMMUNITY_SIZE,
+                                                    similarityMatrix)
+    print("Updated similarityMatrix at {0}".format(datetime.datetime.today()))
+    #writeResultsToFile(results,
+    #                   'results-{0}-{1}-{2}.csv'.format(
+    #                        i, partitionResolution, datetime.datetime.today()))
+    #print("Wrote results to CSV file at {0}".format(datetime.datetime.today()))
     print("Completed {0} of {1} results files.".format(
                             (i+1), CREATE_THIS_MANY_RESULTS_FILES))
+
+drawMapOfSimilarityMatrix(G, similarityMatrix, 'crude', '17031',
+                          CREATE_THIS_MANY_RESULTS_FILES)
+print("Mapped similarityMatrix at {0}".format(datetime.datetime.today()))
