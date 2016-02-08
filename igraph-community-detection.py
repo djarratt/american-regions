@@ -12,7 +12,7 @@ from mpl_toolkits.basemap import Basemap
 def getGeoCoordinatesFrom(filePath):
     """ Centers of Population from the U.S. Census Bureau: http://www2.census
     .gov/geo/docs/reference/cenpop2010/county/CenPop2010_Mean_CO.txt """
-    geo_coordinates = {}
+    geoCoordinates = {}
     with open(filePath) as csvfile:
         reader = csv.DictReader(csvfile, delimiter=',', quoting=csv.QUOTE_NONE)
         for row in reader:
@@ -21,8 +21,8 @@ def getGeoCoordinatesFrom(filePath):
             fips = statefp + countyfp
             lat = row["LATITUDE"].strip().replace("+", "")
             lng = row["LONGITUDE"].strip()
-            geo_coordinates[fips] = (lat, lng)
-    return geo_coordinates
+            geoCoordinates[fips] = (lat, lng)
+    return geoCoordinates
 
 
 def getNodesEdgesAtMinimumWeightFrom(filePath, minimumWeight):
@@ -41,17 +41,15 @@ def getNodesEdgesAtMinimumWeightFrom(filePath, minimumWeight):
                 nodes.append(fromCounty)
                 nodes.append(toCounty)
                 edges.append((fromCounty, toCounty, weight))
-
-    # omit duplicate node IDs
-    nodes = set(nodes)
+    nodes = set(nodes)  # omit duplicate node IDs
     return nodes, edges
 
 
-def getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geo_coordinates):
+def getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geoCoordinates):
     graph = ig.Graph(directed=True)
     for node in nodes:
-        lat = geo_coordinates[node][0]
-        lng = geo_coordinates[node][1]
+        lat = geoCoordinates[node][0]
+        lng = geoCoordinates[node][1]
         graph.add_vertex(node, latitude=lat, longitude=lng)
     for edge in edges:
         graph.add_edge(edge[0], edge[1], weight=edge[2])
@@ -69,7 +67,7 @@ def writeResultsToFile(results, filePath):
 
 def getGraphPartition(graph, resolution):
     """The returned partition is each county assigned to a community. While
-    there are several methods available, RBConfiguration is tunable with the
+    there are several methods available, RBConfiguration is tunable with a
     resolution parameter. Bigger resolutions mean smaller communities. Smaller
     resolutions mean fewer communities."""
     return louvain.find_partition(G, method='RBConfiguration', weight='weight',
@@ -106,6 +104,8 @@ def getQualitativeColorList(numberOfColorsNeeded):
 
 def addResultsToSimilarityMatrix(graph, partition, minimumSize,
                                  similarityMatrix):
+    """Creates symmetric matrix with counties on the x- and y-axes. Cells are
+    the number of times the x- and y-counties appeared in the same community."""
     for community in partition:
         communityList = []
         if len(community) > minimumSize:
@@ -173,9 +173,9 @@ def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
         figSize = (10, 5)
     else:
         basemapResolution = 'c'
-        DPI = 100
-        reliefScale = 0.2
-        figSize = (4, 2)
+        DPI = 250
+        reliefScale = 0.5
+        figSize = (5, 2.5)
 
     plt.figure(figsize=figSize)
     m = Basemap(llcrnrlon=-119, llcrnrlat=22, urcrnrlon=-64, urcrnrlat=49,
@@ -186,7 +186,6 @@ def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
     m.drawstates()
     m.drawcountries()
     if quality == 'high':
-        m.drawrivers(color='blue')
         m.drawcounties()
 
     toDraw = similarityMatrix[targetCounty]
@@ -194,7 +193,8 @@ def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
     for county, matches in toDraw.iteritems():
         x, y = m(graph.vs.find(name=county)["longitude"],
                  graph.vs.find(name=county)["latitude"])
-        m.scatter(x, y, 3, marker='o', color=str((matches/float(denominator))))
+        percentSimilar = matches / float(denominator)
+        m.scatter(x, y, 3, marker='o', color='white', alpha=percentSimilar)
 
     mapName = "proportion-map-{0}-{1}.png".format(
         targetCounty, datetime.datetime.today())
@@ -204,7 +204,7 @@ def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
 MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
 MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
 ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND = [4]
-CREATE_THIS_MANY_RESULTS_FILES = 3
+CREATE_THIS_MANY_RESULTS_FILES = 10
 
 try:
     G = ig.Graph.Read_Pickle('persistentGraph.pickle')
@@ -212,7 +212,7 @@ try:
         datetime.datetime.today()))
 except Exception as e:
     print(e)
-    geo_coordinates = getGeoCoordinatesFrom('government/CenPop2010_Mean_CO.txt')
+    geoCoordinates = getGeoCoordinatesFrom('government/CenPop2010_Mean_CO.txt')
     print("Loaded geo coordinates at {0}".format(
         datetime.datetime.today()))
     nodes, edges = getNodesEdgesAtMinimumWeightFrom(
@@ -220,7 +220,7 @@ except Exception as e:
                                 MINIMUM_EDGE_WEIGHT)
     print("Loaded nodes and edges at {0}".format(
         datetime.datetime.today()))
-    G = getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geo_coordinates)
+    G = getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geoCoordinates)
     print("Filled graph with nodes and edges at {0}".format(
         datetime.datetime.today()))
     G.write_pickle('persistentGraph.pickle')
@@ -259,6 +259,6 @@ for i in range(CREATE_THIS_MANY_RESULTS_FILES):
     print("Completed {0} of {1} results files.".format(
                             (i+1), CREATE_THIS_MANY_RESULTS_FILES))
 
-drawMapOfSimilarityMatrix(G, similarityMatrix, 'crude', '17031',
+drawMapOfSimilarityMatrix(G, similarityMatrix, 'crude', '12086',
                           CREATE_THIS_MANY_RESULTS_FILES)
 print("Mapped similarityMatrix at {0}".format(datetime.datetime.today()))
