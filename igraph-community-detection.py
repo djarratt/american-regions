@@ -9,10 +9,10 @@ import matplotlib.cm as cm
 from mpl_toolkits.basemap import Basemap
 
 
-def getGeoCoordinatesFrom(filePath):
+def getMetadataFrom(filePath):
     """ Centers of Population from the U.S. Census Bureau: http://www2.census
     .gov/geo/docs/reference/cenpop2010/county/CenPop2010_Mean_CO.txt """
-    geoCoordinates = {}
+    metadata = {}
     with open(filePath) as csvfile:
         reader = csv.DictReader(csvfile, delimiter=',', quoting=csv.QUOTE_NONE)
         for row in reader:
@@ -21,8 +21,11 @@ def getGeoCoordinatesFrom(filePath):
             fips = statefp + countyfp
             lat = row["LATITUDE"].strip().replace("+", "")
             lng = row["LONGITUDE"].strip()
-            geoCoordinates[fips] = (lat, lng)
-    return geoCoordinates
+            countyName = row["COUNAME"].strip()
+            stateName = row["STNAME"].strip()
+            population = row["POPULATION"].strip()
+            metadata[fips] = (lat, lng, countyName, stateName, population)
+    return metadata
 
 
 def getNodesEdgesAtMinimumWeightFrom(filePath, minimumWeight):
@@ -45,12 +48,17 @@ def getNodesEdgesAtMinimumWeightFrom(filePath, minimumWeight):
     return nodes, edges
 
 
-def getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geoCoordinates):
+def getGraphWithNodesEdgesMetadata(nodes, edges, metadata):
     graph = ig.Graph(directed=True)
     for node in nodes:
-        lat = geoCoordinates[node][0]
-        lng = geoCoordinates[node][1]
-        graph.add_vertex(node, latitude=lat, longitude=lng)
+        lat = metadata[node][0]
+        lng = metadata[node][1]
+        countyName = metadata[node][2]
+        stateName = metadata[node][3]
+        population = metadata[node][4]
+        graph.add_vertex(node, latitude=lat, longitude=lng,
+                         countyName=countyName, stateName=stateName,
+                         population=population)
     for edge in edges:
         graph.add_edge(edge[0], edge[1], weight=edge[2])
     return graph
@@ -201,29 +209,59 @@ def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
     plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
 
 
+def getVariance(data):
+    n = 0
+    mean = 0.0
+    M2 = 0.0
+    for fips, freq in data.iteritems():
+        n += 1
+        delta = freq - mean
+        mean += delta/n
+        M2 += delta*(freq - mean)
+    if n < 2:
+        return float('nan')
+    else:
+        return M2 / (n - 1)
+
+
+def printSimilarityMatrixMetrics(similarityMatrix, metadata):
+    variances = {}
+    for fips, similarities in similarityMatrix.iteritems():
+        variances[fips] = getVariance(similarities)
+    sortedVariances = sorted(variances, key=variances.get)
+    for county in sortedVariances:
+        print(county, metadata[county], variances[county])
+
+
 MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
 MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
-ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND = [4]
-CREATE_THIS_MANY_RESULTS_FILES = 10
+ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND = [3,4,5]
+CREATE_THIS_MANY_RESULTS_FILES = 100
+YEAR = "1213"  # 1112 for 2011-2012, 1213 for 2012-2013
+TARGET_COUNTY = '17031'
+MAP_QUALITY = 'high'
 
 try:
-    G = ig.Graph.Read_Pickle('persistentGraph.pickle')
+    G = ig.Graph.Read_Pickle('persistentGraph{0}.pickle'.format(YEAR))
     print("Loaded graph from stored pickle file at {0}".format(
+        datetime.datetime.today()))
+    metadata = getMetadataFrom('government/CenPop2010_Mean_CO.txt')
+    print("Loaded metadata at {0}".format(
         datetime.datetime.today()))
 except Exception as e:
     print(e)
-    geoCoordinates = getGeoCoordinatesFrom('government/CenPop2010_Mean_CO.txt')
-    print("Loaded geo coordinates at {0}".format(
+    metadata = getMetadataFrom('government/CenPop2010_Mean_CO.txt')
+    print("Loaded metadata at {0}".format(
         datetime.datetime.today()))
+    sourceFile = 'generated-datasets/county-to-county{0}.csv'.format(YEAR)
     nodes, edges = getNodesEdgesAtMinimumWeightFrom(
-                                'generated-datasets/county-to-county1213.csv',
-                                MINIMUM_EDGE_WEIGHT)
+                                                sourceFile, MINIMUM_EDGE_WEIGHT)
     print("Loaded nodes and edges at {0}".format(
         datetime.datetime.today()))
-    G = getGraphWithNodesEdgesGeoCoordinates(nodes, edges, geoCoordinates)
+    G = getGraphWithNodesEdgesMetadata(nodes, edges, metadata)
     print("Filled graph with nodes and edges at {0}".format(
         datetime.datetime.today()))
-    G.write_pickle('persistentGraph.pickle')
+    G.write_pickle('persistentGraph{0}.pickle'.format(YEAR))
     print("Saved graph in stored pickle file at {0}".format(
         datetime.datetime.today()))
 
@@ -259,6 +297,7 @@ for i in range(CREATE_THIS_MANY_RESULTS_FILES):
     print("Completed {0} of {1} results files.".format(
                             (i+1), CREATE_THIS_MANY_RESULTS_FILES))
 
-drawMapOfSimilarityMatrix(G, similarityMatrix, 'crude', '12086',
+printSimilarityMatrixMetrics(similarityMatrix, metadata)
+drawMapOfSimilarityMatrix(G, similarityMatrix, MAP_QUALITY, TARGET_COUNTY,
                           CREATE_THIS_MANY_RESULTS_FILES)
 print("Mapped similarityMatrix at {0}".format(datetime.datetime.today()))

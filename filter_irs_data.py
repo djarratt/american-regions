@@ -7,7 +7,7 @@ headerRow = "fromCountyFIPSid,toCountyFIPSid,countTaxReturns," + \
             "countTaxExemptions,sumAdjustedGrossIncome1000s"
 print(headerRow)
 
-with open('government/countyoutflow1213.csv') as csvfile:
+with open('government/countyoutflow1112.csv') as csvfile:
     reader = csv.DictReader(csvfile)
     for row in reader:
         fromStateFIPSid = row['y1_statefips']
