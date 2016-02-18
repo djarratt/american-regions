@@ -36,6 +36,8 @@ def getNodesEdgesAtMinimumWeightFrom(filePath, minimumWeight):
         for row in reader:
             fromCounty = row['fromCountyFIPSid']
             toCounty = row['toCountyFIPSid']
+            fromState = fromCounty[0:1]
+            toState = toCounty[0:1]
             # weight may also be set to the value of either
             # int(row['countTaxReturns'])
             # int(row['sumAdjustedGrossIncome1000s'])
@@ -62,15 +64,6 @@ def getGraphWithNodesEdgesMetadata(nodes, edges, metadata):
     for edge in edges:
         graph.add_edge(edge[0], edge[1], weight=edge[2])
     return graph
-
-
-def writeResultsToFile(results, filePath):
-    with open(filePath, 'wb') as csvfile:
-        fieldnames = ['counties']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for community in results:
-            writer.writerow({'counties': community})
 
 
 def getGraphPartition(graph, resolution):
@@ -110,10 +103,18 @@ def getQualitativeColorList(numberOfColorsNeeded):
         return iter(cm.rainbow(np.linspace(0, 1, numberOfColorsNeeded)))
 
 
+def getDivergingColorList(numberOfColorsNeeded):
+    """From the invaluable http://colorbrewer2.org using diverging data
+    classes, colorblind safe for 3 and 4 colors, border context, terrain
+    background. See also http://matplotlib.org/api/colors_api.html"""
+    if numberOfColorsNeeded == 5:
+        return ['#ca0020', '#f4a582', '#f7f7f7', '#92c5de', '#0571b0']
+    else:
+        return iter(cm.rainbow(np.linspace(0, 1, numberOfColorsNeeded)))
+
+
 def addResultsToSimilarityMatrix(graph, partition, minimumSize,
                                  similarityMatrix):
-    """Creates symmetric matrix with counties on the x- and y-axes. Cells are
-    the number of times the x- and y-counties appeared in the same community."""
     for community in partition:
         communityList = []
         if len(community) > minimumSize:
@@ -132,48 +133,8 @@ def addResultsToSimilarityMatrix(graph, partition, minimumSize,
     return similarityMatrix
 
 
-def drawMapOfPartition(partition, quality, minimumSize, graph):
-    if quality == 'high':
-        basemapResolution = 'i'
-        DPI = 500
-        reliefScale = 1
-        figSize = (10, 5)
-    else:
-        basemapResolution = 'c'
-        DPI = 100
-        reliefScale = 0.2
-        figSize = (4, 2)
-
-    plt.figure(figsize=figSize)
-    m = Basemap(llcrnrlon=-119, llcrnrlat=22, urcrnrlon=-64, urcrnrlat=49,
-                projection='lcc', lat_1=33, lat_2=45, lon_0=-95,
-                resolution=basemapResolution)
-    m.shadedrelief(scale=reliefScale)
-    m.drawcoastlines()
-    m.drawstates()
-    m.drawcountries()
-    if quality == 'high':
-        m.drawrivers(color='blue')
-        m.drawcounties()
-
-    numberOfCommunitiesDetected = getCountOfCommunitiesOfMinimumSize(
-                                    partition, minimumSize)
-    colors = getQualitativeColorList(numberOfCommunitiesDetected)
-    for community in partition:
-        color = next(colors)
-        if len(community) >= minimumSize:
-            for county in community:
-                x, y = m(graph.vs[county]["longitude"],
-                         graph.vs[county]["latitude"])
-                m.scatter(x, y, 3, marker='o', color=color)
-
-    mapName = "maps/american-regions-{0}-{1}-{2}.png".format(
-                datetime.datetime.today(), res, numberOfCommunitiesDetected)
-    plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
-
-
 def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
-                              denominator):
+                              denominator, classesToDraw=5):
     if quality == 'high':
         basemapResolution = 'i'
         DPI = 500
@@ -198,51 +159,53 @@ def drawMapOfSimilarityMatrix(graph, similarityMatrix, quality, targetCounty,
 
     toDraw = similarityMatrix[targetCounty]
 
+    colors = getDivergingColorList(classesToDraw)
+    classBucketSize = 1 / float(classesToDraw - 1)
+
     for county, matches in toDraw.iteritems():
         x, y = m(graph.vs.find(name=county)["longitude"],
                  graph.vs.find(name=county)["latitude"])
         percentSimilar = matches / float(denominator)
-        m.scatter(x, y, 3, marker='o', color='white', alpha=percentSimilar)
+        if percentSimilar == 1:
+            colorOffset = int(classesToDraw - 1)
+        else:
+            colorOffset = int(percentSimilar // classBucketSize)
+        m.scatter(x, y, 3, marker='o', color=colors[colorOffset])
 
     mapName = "proportion-map-{0}-{1}.png".format(
         targetCounty, datetime.datetime.today())
     plt.savefig(mapName, dpi=DPI, bbox_inches='tight')
 
 
-def getVariance(data):
-    n = 0
-    mean = 0.0
-    M2 = 0.0
-    for fips, freq in data.iteritems():
-        n += 1
-        delta = freq - mean
-        mean += delta/n
-        M2 += delta*(freq - mean)
-    if n < 2:
-        return float('nan')
+def getUniformDistributionMinMax(acceptableList, prevRes=1, prevMin=0.5,
+                                 prevMax=1.5, numCommunitiesFound=10):
+    coefficient = random.uniform(0.9, 1.1)
+    if numCommunitiesFound < min(acceptableList):
+        coefficient *= min(acceptableList) / float(numCommunitiesFound)
+        print(" {0} found and {1} is the minimum OK community count".format(
+            numCommunitiesFound, min(acceptableList)))
+    elif numCommunitiesFound > max(acceptableList):
+        coefficient *= max(acceptableList) / float(numCommunitiesFound)
+        print(" {0} found and {1} is the maximum OK community count".format(
+            numCommunitiesFound, max(acceptableList)))
     else:
-        return M2 / (n - 1)
-
-
-def printSimilarityMatrixMetrics(similarityMatrix, metadata):
-    variances = {}
-    for fips, similarities in similarityMatrix.iteritems():
-        variances[fips] = getVariance(similarities)
-    sortedVariances = sorted(variances, key=variances.get)
-    for county in sortedVariances:
-        print(county, metadata[county], variances[county])
+        print("{0} is within the list of acceptable community counts".format(
+            numCommunitiesFound))
+    print("Modifying uniform distribution range by {0}".format(coefficient))
+    return prevMin * coefficient, prevMax * coefficient
 
 
 MINIMUM_EDGE_WEIGHT = 0  # import only edges at this weight or greater
 MINIMUM_COMMUNITY_SIZE = 3  # draw communities at this size or greater
-ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND = [3,4,5]
-CREATE_THIS_MANY_RESULTS_FILES = 100
+ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND = range(3, 7)
+CREATE_THIS_MANY_RESULTS_FILES = 150
 YEAR = "1213"  # 1112 for 2011-2012, 1213 for 2012-2013
-TARGET_COUNTY = '17031'
+TARGET_COUNTY = '46065'
 MAP_QUALITY = 'high'
 
 try:
-    G = ig.Graph.Read_Pickle('persistentGraph{0}.pickle'.format(YEAR))
+    G = ig.Graph.Read_Pickle('persistentGraph-{0}-{1}.pickle'.format(
+            YEAR, MINIMUM_EDGE_WEIGHT))
     print("Loaded graph from stored pickle file at {0}".format(
         datetime.datetime.today()))
     metadata = getMetadataFrom('government/CenPop2010_Mean_CO.txt')
@@ -261,43 +224,39 @@ except Exception as e:
     G = getGraphWithNodesEdgesMetadata(nodes, edges, metadata)
     print("Filled graph with nodes and edges at {0}".format(
         datetime.datetime.today()))
-    G.write_pickle('persistentGraph{0}.pickle'.format(YEAR))
+    G.write_pickle('persistentGraph-{0}-{1}.pickle'.format(
+            YEAR, MINIMUM_EDGE_WEIGHT))
     print("Saved graph in stored pickle file at {0}".format(
         datetime.datetime.today()))
 
 similarityMatrix = {}
 
 print("Beginning community detection at {0}".format(datetime.datetime.today()))
+distMin, distMax = getUniformDistributionMinMax(
+            ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND)
 for i in range(CREATE_THIS_MANY_RESULTS_FILES):
     numberOfCommunitiesDetected = 0
     while numberOfCommunitiesDetected not in \
             ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND:
-
-        partitionResolution = random.uniform(0.225, 0.3)
+        partitionResolution = random.uniform(distMin, distMax)
         partition = getGraphPartition(G, partitionResolution)
         numberOfCommunitiesDetected = getCountOfCommunitiesOfMinimumSize(
             partition, MINIMUM_COMMUNITY_SIZE)
         print("{0} communities found with resolution {1} at {2}".format(
             numberOfCommunitiesDetected, partitionResolution,
             datetime.datetime.today()))
-
-    #results = getListOfCommunities(G, partition, MINIMUM_COMMUNITY_SIZE)
-    #print("Created results data structure at {0}".format(
-    #    datetime.datetime.today()))
-    # drawMapOfPartition(partition, 'crude', MINIMUM_COMMUNITY_SIZE, graph)
+        distMin, distMax = getUniformDistributionMinMax(
+                ACCEPTABLE_LIST_OF_NUMBER_OF_COMMUNITIES_FOUND,
+                partitionResolution, distMin, distMax,
+                numberOfCommunitiesDetected)
 
     similarityMatrix = addResultsToSimilarityMatrix(G, partition,
                                                     MINIMUM_COMMUNITY_SIZE,
                                                     similarityMatrix)
     print("Updated similarityMatrix at {0}".format(datetime.datetime.today()))
-    #writeResultsToFile(results,
-    #                   'results-{0}-{1}-{2}.csv'.format(
-    #                        i, partitionResolution, datetime.datetime.today()))
-    #print("Wrote results to CSV file at {0}".format(datetime.datetime.today()))
-    print("Completed {0} of {1} results files.".format(
+    print("Completed {0} of {1} result files.".format(
                             (i+1), CREATE_THIS_MANY_RESULTS_FILES))
 
-printSimilarityMatrixMetrics(similarityMatrix, metadata)
 drawMapOfSimilarityMatrix(G, similarityMatrix, MAP_QUALITY, TARGET_COUNTY,
                           CREATE_THIS_MANY_RESULTS_FILES)
 print("Mapped similarityMatrix at {0}".format(datetime.datetime.today()))
