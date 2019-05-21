@@ -2,8 +2,8 @@ import pandas as pd
 import igraph as ig
 import random
 
-STATE = 'New York'
-COUNTY = 'New York'
+STATE = 'Illinois'
+COUNTY = 'Cook'
 ITERATIONS = 13
 
 # get latitude and longitude values
@@ -49,6 +49,7 @@ edges["weight"] = 100 * (pd.to_numeric(edges["n2_x"]) / pd.to_numeric(edges["n2_
 edges = edges[["y1_fips", "y2_fips", "weight"]]\
     .rename(index=str, columns={"y1_fips": "from", "y2_fips": "to"})
 
+# do community detection in a loop, because it's probabilistic and we want to see a general tendency
 fips_found_in_same_region = {}
 for i in range(ITERATIONS):
     iteration_sample_frac = random.uniform(0.1, 0.9)
@@ -67,7 +68,6 @@ for i in range(ITERATIONS):
             communities_df = communities_df.append(
                 pd.DataFrame.from_dict({'region': [clid], 'fips': [G.vs[member]['name']]})
             )
-    #print(communities_df['region'].value_counts())
 
     target_region = communities_df[communities_df["fips"].str.startswith(target_fips_to_map)].iloc[0]["region"]
     other_fips_in_region = communities_df[communities_df["region"] == target_region]["fips"]
@@ -83,4 +83,4 @@ target_fips_neighbors = pd.DataFrame(list(fips_found_in_same_region.items()), co
 # omit neighbors that only appear once -- likely noise
 target_fips_neighbors[target_fips_neighbors["frequency"] > 1]\
     .sort_values(by = ["frequency", "fips"], ascending = [False, True])\
-    .to_csv("neighbor-fips-to-{}.csv".format(target_fips_to_map))
+    .to_csv("neighbor-fips-to-{}-County-{}.csv".format(COUNTY, STATE))
