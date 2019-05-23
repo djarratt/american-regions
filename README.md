@@ -28,4 +28,11 @@ What is the Midwest? Where is the South? Where's the gateway to the West? How do
 * [Which States Are in the Midwest?](https://fivethirtyeight.com/features/what-states-are-in-the-midwest/)
 * [More Data Analysts Went Looking For the South And Midwest, And Here’s What They Found](https://fivethirtyeight.com/features/more-data-analysts-went-looking-for-the-south-and-midwest-and-heres-what-they-found/)
 
-And of course, [Wikipedia's Regions of the United States category](https://en.wikipedia.org/wiki/Category:Regions_of_the_United_States).
+And of course, Wikipedia's [List of regions of the United States](https://en.wikipedia.org/wiki/List_of_regions_of_the_United_States) and [Regions of the United States category](https://en.wikipedia.org/wiki/Category:Regions_of_the_United_States).
+
+## My approach
+1. Migration data
+2. Graph data structures
+3. Graph community detection methods
+4. Probablistic method that gives us "fuzzy" community detection
+5. Regions are defined by a county of interest. That is, for any given County C, what proportion of the time does any other County X fall into the same detected community?
